@@ -19,21 +19,22 @@ class RelayBP(DMemBP):
 
         self.minimum_weight = float('inf')
         self.found_solutions = 0
-        self.best_error_estimate = None
+        self.best_error_estimate = np.zeros(self.H.shape[1])
         self.relay_marginals = None
     
     def decode(self, syndrome):
         # do pre dmembp
-        error_estimate, self.relay_marginals = super().decode(syndrome)
+        error_estimate, self.relay_marginals, converged = super().decode(syndrome)
         self.minimum_weight = float('inf')
         for r in range(self.num_sets):
             # do dmembp and pass on the marginals
-            error_estimate, self.relay_marginals = super().decode(syndrome, self.relay_marginals)
-            estimate_weight = np.sum(error_estimate.decoding*self.error_priors).item()
-            self.found_solutions += 1  # TODO: dmempbp always returns a solutions (even invalid ones)!
-            if(estimate_weight < self.minimum_weight):
-                self.best_error_estimate = error_estimate.decoding
-                self.minimum_weight = estimate_weight
+            error_estimate, self.relay_marginals, converged = super().decode(syndrome, self.relay_marginals)
+            if(converged):
+                estimate_weight = np.sum(error_estimate.decoding*self.error_priors).item()
+                self.found_solutions += 1  # TODO: dmempbp always returns a solutions (even invalid ones)!
+                if(estimate_weight < self.minimum_weight):
+                    self.best_error_estimate = error_estimate.decoding
+                    self.minimum_weight = estimate_weight
             
             if(self.found_solutions == self.stop_nconv):
                 self.result.decoding = self.best_error_estimate

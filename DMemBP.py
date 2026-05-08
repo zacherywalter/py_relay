@@ -35,7 +35,7 @@ class DMemBP:
 
         # all length n vectors
         self.error_priors = error_priors
-        self.priors_llr = np.log2((1-self.error_priors)/self.error_priors)
+        self.priors_llr = np.log((1-self.error_priors)/self.error_priors)
         self.marginals = self.priors_llr
         self.bias_lambda = self.priors_llr
 
@@ -78,47 +78,13 @@ class DMemBP:
             # check convergence
             if((self.H@error_estimate%2 == syndrome).all()):  # bp converged
                 self.result.decoding = error_estimate
-                return self.result, self.marginals  # , True  # converged
+                return self.result, self.marginals, True  # converged
                 
         self.result.decoding = np.ones(self.n, dtype=np.uint8)# error_estimate  # np.zeros(self.n, dtype=np.uint8)#
-        return self.result, self.marginals  # , False  # not converged
-    
-    def decode_batch(self, syndrome_batch, marginals=None):
-        """
-        args:
-            syndrome_batch:
-                shape (batch_size, m)
-        """
-        if(marginals != None): self.marginals=marginals
-        self.batch_size, m = syndrome_batch.shape
-        self.bias_lambda_batch = self.expand_to_batch(self.priors_llr, self.batch_size)
-        self.marginals_batch = self.expand_to_batch(self.priors_llr, self.batch_size)
-        vn_messages_batch = self.expand_to_batch(self.expand_variables(self.priors_llr), self.batch_size)
-        self.minimum_weight = float('inf')
-
-        not_converged = np.repeat([True], self.batch_size)
-        error_estimate = np.zeros((self.batch_size, self.n))
-
-        for i in range(self.max_iterations):
-            self.update_lambda_batch()
-            cn_messages_batch = self.cn_fn_batch(vn_messages_batch, syndrome_batch)
-            vn_messages_batch = self.vn_fn_batch(cn_messages_batch)
-            self.update_marginals_batch(cn_messages_batch)
-            error_estimate[not_converged,:] = self.hard_decision_batch()[not_converged,:]
-
-            not_converged = ((self.H@error_estimate.transpose()).transpose() != syndrome_batch).any(axis=1)
-        return error_estimate
-        
-    def update_lambda_batch(self):
-        explicit_gammas_batch = self.expand_to_batch(self.explicit_gammas, self.batch_size)
-        self.bias_lambda_batch = explicit_gammas_batch*self.marginals_batch + (1-explicit_gammas_batch)*self.bias_lambda_batch
+        return self.result, self.marginals, False  # not converged
     
     def update_lambda(self):
-        self.bias_lambda = self.explicit_gammas*self.marginals+ (1-self.explicit_gammas)*self.bias_lambda
-    
-    def expand_to_batch(self, array_H, batch_size):
-        """np.array of shape (m, n) becomes array of shape (batch_size, m, n)"""
-        return np.repeat(np.expand_dims(array_H, axis=0), batch_size, axis=0)
+        self.bias_lambda = self.explicit_gammas*self.priors_llr + (1-self.explicit_gammas)*self.bias_lambda
     
     def expand_checks(self, array_m):
         """take a 1-d np.array of length m and repeat it n times
@@ -172,6 +138,61 @@ class DMemBP:
         cn_messages = sign_prod_expanded * syndrome_expanded * min_messages
         return cn_messages
 
+    def vn_fn(self, cn_messages):  # dep. self.bias_lambda
+        # equation 2
+        lambda_expanded = self.expand_variables(self.bias_lambda)
+        vn_messages = lambda_expanded + self.expand_variables(np.sum(cn_messages, axis=0)) - cn_messages
+        vn_messages = np.clip(vn_messages, -self.K, self.K)
+        return vn_messages
+
+    def update_marginals(self, cn_messages):
+        # equation 3
+        self.marginals = np.sum(cn_messages, axis=0) + self.bias_lambda
+        
+    def hard_decision(self):
+        error_estimate = np.array(self.marginals < 0, dtype=int)
+        return error_estimate
+
+
+#############################################################################
+################################ BATCH METHODS ##############################
+#############################################################################
+
+
+    def decode_batch(self, syndrome_batch, marginals=None):
+        """
+        args:
+            syndrome_batch:
+                shape (batch_size, m)
+        """
+        if(marginals != None): self.marginals=marginals
+        self.batch_size, m = syndrome_batch.shape
+        self.bias_lambda_batch = self.expand_to_batch(self.priors_llr, self.batch_size)
+        self.marginals_batch = self.expand_to_batch(self.priors_llr, self.batch_size)
+        vn_messages_batch = self.expand_to_batch(self.expand_variables(self.priors_llr), self.batch_size)
+        self.minimum_weight = float('inf')
+
+        not_converged = np.repeat([True], self.batch_size)
+        error_estimate = np.zeros((self.batch_size, self.n))
+
+        for i in range(self.max_iterations):
+            self.update_lambda_batch()
+            cn_messages_batch = self.cn_fn_batch(vn_messages_batch, syndrome_batch)
+            vn_messages_batch = self.vn_fn_batch(cn_messages_batch)
+            self.update_marginals_batch(cn_messages_batch)
+            error_estimate[not_converged,:] = self.hard_decision_batch()[not_converged,:]
+
+            not_converged = ((self.H@error_estimate.transpose()).transpose() != syndrome_batch).any(axis=1)
+        return error_estimate
+    
+    def update_lambda_batch(self):
+        explicit_gammas_batch = self.expand_to_batch(self.explicit_gammas, self.batch_size)
+        self.bias_lambda_batch = explicit_gammas_batch*self.marginals_batch + (1-explicit_gammas_batch)*self.bias_lambda_batch
+
+    def expand_to_batch(self, array_H, batch_size):
+        """np.array of shape (m, n) becomes array of shape (batch_size, m, n)"""
+        return np.repeat(np.expand_dims(array_H, axis=0), batch_size, axis=0)
+
     def cn_fn_batch(self, vn_messages_batch, syndrome_batch):
         """check node update function
         args:
@@ -199,30 +220,15 @@ class DMemBP:
         cn_messages_batch = sign_prod_expanded * syndrome_expanded * min_messages
         return cn_messages_batch
 
-    def vn_fn(self, cn_messages):  # dep. self.bias_lambda
-        # equation 2
-        lambda_expanded = self.expand_variables(self.bias_lambda)
-        vn_messages = lambda_expanded + self.expand_variables(np.sum(cn_messages, axis=0)) - cn_messages
-        vn_messages = np.clip(vn_messages, -self.K, self.K)
-        return vn_messages
-
     def vn_fn_batch(self, cn_messages_batch):  # dep. self.bias_lambda
         # equation 2
         vn_messages_batch = self.expand_variables(self.bias_lambda_batch) + self.expand_variables(np.sum(cn_messages_batch, axis=1)) - cn_messages_batch
         vn_messages_batch = np.clip(vn_messages_batch, -self.K, self.K)
         return vn_messages_batch
-
-    def update_marginals(self, cn_messages):
-        # equation 3
-        self.marginals = np.sum(cn_messages, axis=0) + self.bias_lambda
         
     def update_marginals_batch(self, cn_messages_batch):
         # equation 3
         self.marginals_batch = np.sum(cn_messages_batch, axis=1) + self.bias_lambda_batch
-
-    def hard_decision(self):
-        error_estimate = np.array(self.marginals < 0, dtype=int)
-        return error_estimate
         
     def hard_decision_batch(self):
         error_estimate_batch = np.array(self.marginals_batch < 0, dtype=int)
