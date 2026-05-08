@@ -19,7 +19,7 @@ class RelayBP(DMemBP):
 
         self.minimum_weight = float('inf')
         self.found_solutions = 0
-        self.best_error_estimate = np.zeros(self.H.shape[1])
+        self.best_error_estimate = np.zeros(self.H.shape[1], dtype=np.int16)
         self.relay_marginals = None
     
     def decode(self, syndrome):

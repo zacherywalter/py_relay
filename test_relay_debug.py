@@ -37,7 +37,7 @@ lx = np.array(GF2(H_x).null_space())
 
 check_matrix = sp.sparse.csr_matrix(np.asarray(H_x))# detectors x error variables
 
-p = 0.1
+p = 0.2
 error_priors = np.repeat(np.array(p), H_x.shape[1])
 
 # Decoder configuration
